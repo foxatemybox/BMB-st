@@ -1,7 +1,0 @@
-BMB-st stable packaging is intentionally incomplete in Git.
-
-Direct stable finalization is expected to fail with:
-BMB_ST_LAUNCHER_PREP_REQUIRED
-
-BADLOOM Manga Launcher creates .bmb-st/launcher_prepared.json only in its local BMB-st checkout, finalizes the candidate, removes the marker, then publishes the candidate and receipt.
-The marker is operational build state and must never be committed.
