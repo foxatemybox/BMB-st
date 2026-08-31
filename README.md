@@ -2,6 +2,6 @@
 
 Stable-candidate channel for BADLOOM Manga Browser.
 
-This repository intentionally does **not** contain the launcher preparation marker required by `build_contract/finalize_candidate.py`. Running stable finalization directly returns `BMB_ST_LAUNCHER_PREP_REQUIRED`.
+Stable finalization no longer uses a launcher-preparation marker or a blocking gate. `build_contract/finalize_candidate.py` packages a prepared Current build directly and records the exact BD source branch and commit in the build receipt.
 
-The normal Current/dev build in `BD` is unaffected. BADLOOM Manga Launcher checks `BD`, builds the exact current commit in an isolated worktree, temporarily prepares the BMB-st contract, finalizes the candidate here, removes the temporary marker and publishes the candidate receipt.
+BADLOOM Manga Launcher may still orchestrate checkout, build and publication, but BMB-st finalization itself is no longer conditional on launcher-created marker state.
