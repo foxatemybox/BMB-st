@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "engine_api": "0.5",
+  "version": "0.5.3",
+  "bundle_url": "https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.zip",
+  "sha256": "87fd2a552a1a2581a3cc85b3bcc316cfcb37101cc95a940ebc146a42de9772f7",
+  "channel": "stable",
+  "published_at": "2026-09-02T22:07:00Z",
+  "source_commit": "c7bdbb9cee1f69644b4f28fd6d5013e93ff22a76",
+  "changelog": [
+    "Финальное X-уточнение теперь исправляет не только слишком широкие, но и слишком узкие coarse-границы кадра по обеим сторонам.",
+    "Добавлена двусторонняя source-resolution проверка перехода canvas/panel, поэтому реальная левая или правая граница может быть восстановлена наружу без привязки к персонажу.",
+    "Для одиночного кадра восстановление физического края страницы разрешается только когда изображение действительно продолжается до этого края; локальные баллоны и SFX не расширяют CropQuad."
+  ]
+}
