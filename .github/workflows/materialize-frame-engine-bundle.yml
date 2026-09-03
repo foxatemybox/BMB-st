@@ -1,0 +1,69 @@
+name: Materialize frame-engine bundle
+
+on:
+  push:
+    paths:
+      - ".github/workflows/materialize-frame-engine-bundle.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decode and verify frame engine 0.5.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="frame-engine/.publish/0.5.3"
+          out="frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.zip"
+          test -f "$src/part01.b64"
+          test -f "$src/part07.b64"
+          python - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, zipfile
+
+          src = Path("frame-engine/.publish/0.5.3")
+          out = Path("frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.zip")
+          encoded = "".join(path.read_text(encoding="ascii").strip() for path in sorted(src.glob("part*.b64")))
+          payload = base64.b64decode(encoded, validate=True)
+          expected_size = 18721
+          expected_sha = "87fd2a552a1a2581a3cc85b3bcc316cfcb37101cc95a940ebc146a42de9772f7"
+          actual_sha = hashlib.sha256(payload).hexdigest()
+          if len(payload) != expected_size:
+              raise SystemExit(f"bundle size mismatch: {len(payload)} != {expected_size}")
+          if actual_sha != expected_sha:
+              raise SystemExit(f"bundle sha256 mismatch: {actual_sha} != {expected_sha}")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_bytes(payload)
+          with zipfile.ZipFile(out) as archive:
+              names = archive.namelist()
+              if "badloom_frame_engine/__init__.py" not in names:
+                  raise SystemExit("engine initializer missing")
+              if any(not name.startswith("badloom_frame_engine/") for name in names):
+                  raise SystemExit("unexpected bundle path")
+          print(f"verified {out}: {len(payload)} bytes sha256={actual_sha}")
+          PY
+
+      - name: Commit repaired binary and remove staging files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf frame-engine/.publish/0.5.3
+          rm -f frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.zip.b64-test
+          rm -f frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.correct.b64
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A frame-engine
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git commit -m "Repair frame engine 0.5.3 release bundle"
+          git push
