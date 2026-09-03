@@ -1,15 +1,15 @@
 {
   "schema": 1,
   "engine_api": "0.5",
-  "version": "0.5.3",
-  "bundle_url": "https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.zip?rev=ebc19a089a78585e5cac3202057989ea9abd145a",
-  "sha256": "87fd2a552a1a2581a3cc85b3bcc316cfcb37101cc95a940ebc146a42de9772f7",
+  "version": "0.5.4",
+  "bundle_url": "https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/releases/0.5.4/badloom-frame-engine-0.5.4.zip?rev=bb07d59f9b7102a03cd8143b69c0140fd568a62a",
+  "sha256": "06c8837a9b6d43feaee53d887abca1775ba13a38fbfd1878e7ea46ac266ea7e4",
   "channel": "stable",
-  "published_at": "2026-09-03T07:15:21Z",
-  "source_commit": "c7bdbb9cee1f69644b4f28fd6d5013e93ff22a76",
+  "published_at": "2026-09-03T08:15:39Z",
+  "source_commit": "bb07d59f9b7102a03cd8143b69c0140fd568a62a",
   "changelog": [
-    "Финальное X-уточнение теперь исправляет не только слишком широкие, но и слишком узкие coarse-границы кадра по обеим сторонам.",
-    "Добавлена двусторонняя source-resolution проверка перехода canvas/panel, поэтому реальная левая или правая граница может быть восстановлена наружу без привязки к персонажу.",
-    "Для одиночного кадра восстановление физического края страницы разрешается только когда изображение действительно продолжается до этого края; локальные баллоны и SFX не расширяют CropQuad."
+    "Крайние панели горизонтальной same-row группы теперь могут восстанавливать свою внешнюю сторону до физического края страницы, если source-resolution проверка подтверждает непрерывное содержимое.",
+    "Правый borderless кадр больше не останавливается на внутренней тёмной массе персонажа, когда изображение продолжается до правого края страницы.",
+    "Внутренние стороны настоящих соседних кадров по-прежнему не получают page-edge recovery и остаются защищены от ложного расширения."
   ]
 }
