@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - ".github/workflows/materialize-frame-engine-bundle.yml"
+      - "frame-engine/.publish/**/release.ready"
   workflow_dispatch:
 
 permissions:
@@ -17,53 +18,167 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Decode and verify frame engine 0.5.3
+      - name: Decode, verify and stage pending frame engine
+        id: release
         shell: bash
         run: |
           set -euo pipefail
-          src="frame-engine/.publish/0.5.3"
-          out="frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.zip"
-          test -f "$src/part01.b64"
-          test -f "$src/part07.b64"
           python - <<'PY'
-          from pathlib import Path
-          import base64, hashlib, zipfile
+          from __future__ import annotations
 
-          src = Path("frame-engine/.publish/0.5.3")
-          out = Path("frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.zip")
-          encoded = "".join(path.read_text(encoding="ascii").strip() for path in sorted(src.glob("part*.b64")))
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import base64
+          import hashlib
+          import json
+          import os
+          import zipfile
+
+          publish_root = Path("frame-engine/.publish")
+          ready = sorted(publish_root.glob("*/release.ready")) if publish_root.exists() else []
+          if not ready:
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("pending=false\n")
+              print("No pending frame-engine release")
+              raise SystemExit(0)
+          if len(ready) != 1:
+              raise SystemExit(f"expected exactly one pending release, found {len(ready)}")
+
+          source = ready[0].parent
+          spec_path = source / "release.json"
+          if not spec_path.is_file():
+              raise SystemExit("release.json is missing")
+          spec = json.loads(spec_path.read_text(encoding="utf-8"))
+          version = str(spec.get("version") or "").strip()
+          engine_api = str(spec.get("engine_api") or "").strip()
+          expected_sha = str(spec.get("sha256") or "").strip().lower()
+          expected_size = int(spec.get("size") or 0)
+          source_commit = str(spec.get("source_commit") or "").strip()
+          changelog = [str(item).strip() for item in spec.get("changelog", []) if str(item).strip()]
+          if not version or engine_api != "0.5":
+              raise SystemExit("release identity is invalid")
+          if len(expected_sha) != 64 or expected_size < 1:
+              raise SystemExit("release digest/size is invalid")
+
+          parts = sorted(source.glob("part*.b64"))
+          if not parts:
+              raise SystemExit("release has no base64 parts")
+          encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
           payload = base64.b64decode(encoded, validate=True)
-          expected_size = 18721
-          expected_sha = "87fd2a552a1a2581a3cc85b3bcc316cfcb37101cc95a940ebc146a42de9772f7"
           actual_sha = hashlib.sha256(payload).hexdigest()
           if len(payload) != expected_size:
               raise SystemExit(f"bundle size mismatch: {len(payload)} != {expected_size}")
           if actual_sha != expected_sha:
               raise SystemExit(f"bundle sha256 mismatch: {actual_sha} != {expected_sha}")
-          out.parent.mkdir(parents=True, exist_ok=True)
-          out.write_bytes(payload)
-          with zipfile.ZipFile(out) as archive:
+
+          release_dir = Path("frame-engine/releases") / version
+          bundle_name = f"badloom-frame-engine-{version}.zip"
+          bundle_path = release_dir / bundle_name
+          if bundle_path.exists():
+              existing = bundle_path.read_bytes()
+              if hashlib.sha256(existing).hexdigest() != expected_sha:
+                  raise SystemExit("immutable release path already contains different bytes")
+          else:
+              release_dir.mkdir(parents=True, exist_ok=True)
+              bundle_path.write_bytes(payload)
+
+          with zipfile.ZipFile(bundle_path) as archive:
               names = archive.namelist()
               if "badloom_frame_engine/__init__.py" not in names:
                   raise SystemExit("engine initializer missing")
               if any(not name.startswith("badloom_frame_engine/") for name in names):
                   raise SystemExit("unexpected bundle path")
-          print(f"verified {out}: {len(payload)} bytes sha256={actual_sha}")
+
+          manifest = {
+              "schema": 1,
+              "engine_api": engine_api,
+              "version": version,
+              "bundle_url": (
+                  "https://raw.githubusercontent.com/foxatemybox/BMB-st/main/"
+                  f"frame-engine/releases/{version}/{bundle_name}?rev={source_commit or expected_sha[:12]}"
+              ),
+              "sha256": expected_sha,
+              "channel": "stable",
+              "published_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "source_commit": source_commit,
+              "changelog": changelog,
+          }
+          Path("frame-engine/frame-engine-channel.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+              newline="\n",
+          )
+          readme = Path("frame-engine/README.md")
+          if readme.is_file():
+              text = readme.read_text(encoding="utf-8")
+              import re
+              text = re.sub(
+                  r"Current stable engine: `[^`]+`\.",
+                  f"Current stable engine: `{version}`.",
+                  text,
+              )
+              readme.write_text(text, encoding="utf-8", newline="\n")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("pending=true\n")
+              output.write(f"version={version}\n")
+              output.write(f"sha256={expected_sha}\n")
+              output.write(f"size={expected_size}\n")
+              output.write(f"source={source.as_posix()}\n")
+          print(f"verified {bundle_path}: {len(payload)} bytes sha256={actual_sha}")
           PY
 
-      - name: Commit repaired binary and remove staging files
+      - name: Commit stable release and remove staging files
+        if: steps.release.outputs.pending == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf frame-engine/.publish/0.5.3
-          rm -f frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.zip.b64-test
-          rm -f frame-engine/releases/0.5.3/badloom-frame-engine-0.5.3.correct.b64
+          rm -rf "${{ steps.release.outputs.source }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A frame-engine
-          if git diff --cached --quiet; then
-            echo "Nothing to commit"
-            exit 0
-          fi
-          git commit -m "Repair frame engine 0.5.3 release bundle"
+          git commit -m "Publish frame engine ${{ steps.release.outputs.version }} stable channel"
           git push
+
+      - name: Verify public channel exactly like BMB
+        if: steps.release.outputs.pending == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_url="https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/frame-engine-channel.json?verify=${GITHUB_SHA}-${{ steps.release.outputs.version }}"
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if curl --fail --location --silent --show-error "$manifest_url" -o manifest.json; then
+              if python - <<'PY' > bundle-meta.txt
+          import json
+          data = json.load(open("manifest.json", encoding="utf-8"))
+          assert data["schema"] == 1
+          assert data["engine_api"] == "0.5"
+          print(data["version"])
+          print(data["bundle_url"])
+          print(data["sha256"])
+          PY
+              then
+                version="$(sed -n '1p' bundle-meta.txt)"
+                bundle_url="$(sed -n '2p' bundle-meta.txt)"
+                expected_sha="$(sed -n '3p' bundle-meta.txt)"
+                if [ "$version" = "${{ steps.release.outputs.version }}" ] && \
+                   curl --fail --location --silent --show-error "$bundle_url" -o bundle.zip; then
+                  actual_sha="$(sha256sum bundle.zip | awk '{print $1}')"
+                  if [ "$actual_sha" = "$expected_sha" ] && [ "$(stat -c %s bundle.zip)" = "${{ steps.release.outputs.size }}" ]; then
+                    python - <<'PY'
+          import zipfile
+          with zipfile.ZipFile("bundle.zip") as archive:
+              names = archive.namelist()
+              assert "badloom_frame_engine/__init__.py" in names
+              assert all(name.startswith("badloom_frame_engine/") for name in names)
+          PY
+                    echo "Public frame-engine channel verified"
+                    exit 0
+                  fi
+                fi
+              fi
+            fi
+            sleep 3
+          done
+          echo "Public frame-engine channel verification failed" >&2
+          exit 1
