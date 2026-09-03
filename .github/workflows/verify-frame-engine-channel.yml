@@ -1,0 +1,44 @@
+name: Verify public frame-engine channel
+
+on:
+  push:
+    paths:
+      - ".github/workflows/verify-frame-engine-channel.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch manifest and bundle exactly like a public client
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_url="https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/frame-engine-channel.json?verify=${GITHUB_SHA}"
+          curl --fail --location --retry 3 --silent --show-error "$manifest_url" -o manifest.json
+          python - <<'PY' > bundle-meta.txt
+          import json
+          data=json.load(open('manifest.json', encoding='utf-8'))
+          assert data['schema'] == 1
+          assert data['engine_api'] == '0.5'
+          assert data['version'] == '0.5.3'
+          print(data['bundle_url'])
+          print(data['sha256'])
+          PY
+          bundle_url="$(sed -n '1p' bundle-meta.txt)"
+          expected_sha="$(sed -n '2p' bundle-meta.txt)"
+          curl --fail --location --retry 3 --silent --show-error "$bundle_url" -o bundle.zip
+          actual_sha="$(sha256sum bundle.zip | awk '{print $1}')"
+          test "$actual_sha" = "$expected_sha"
+          test "$(stat -c %s bundle.zip)" = "18721"
+          python - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('bundle.zip') as z:
+              names=z.namelist()
+              assert 'badloom_frame_engine/__init__.py' in names
+              assert all(n.startswith('badloom_frame_engine/') for n in names)
+          print('public channel verified')
+          PY
