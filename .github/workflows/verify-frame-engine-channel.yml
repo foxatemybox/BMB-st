@@ -13,11 +13,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch manifest and bundle exactly like a public client
+      - name: Fetch manifest and bundle exactly like BMB
         shell: bash
         run: |
           set -euo pipefail
-          manifest_url="https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/frame-engine-channel.json?verify=${GITHUB_SHA}"
+          manifest_url="https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/frame-engine-channel.json"
           curl --fail --location --retry 3 --silent --show-error "$manifest_url" -o manifest.json
           python - <<'PY' > bundle-meta.txt
           import json
