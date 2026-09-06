@@ -1,15 +1,21 @@
 {
   "schema": 1,
   "engine_api": "0.5",
-  "version": "0.5.4",
-  "bundle_url": "https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/releases/0.5.4/badloom-frame-engine-0.5.4.zip?rev=bb07d59f9b7102a03cd8143b69c0140fd568a62a",
-  "sha256": "06c8837a9b6d43feaee53d887abca1775ba13a38fbfd1878e7ea46ac266ea7e4",
+  "version": "0.5.7",
+  "bundle_url": "https://raw.githubusercontent.com/foxatemybox/BMB-st/main/frame-engine/releases/0.5.7/badloom-frame-engine-0.5.7.zip?rev=3ad1a349173b4ca6922b5578688bddcbaf11b879",
+  "sha256": "3e3cf4bd5027b450720f7dbba74bbb51b6c75746f441f62df3c4ea3086d86c71",
   "channel": "stable",
-  "published_at": "2026-09-03T08:15:39Z",
-  "source_commit": "bb07d59f9b7102a03cd8143b69c0140fd568a62a",
+  "published_at": "2026-09-06T21:16:20Z",
+  "source_commit": "3ad1a349173b4ca6922b5578688bddcbaf11b879",
   "changelog": [
-    "Крайние панели горизонтальной same-row группы теперь могут восстанавливать свою внешнюю сторону до физического края страницы, если source-resolution проверка подтверждает непрерывное содержимое.",
-    "Правый borderless кадр больше не останавливается на внутренней тёмной массе персонажа, когда изображение продолжается до правого края страницы.",
-    "Внутренние стороны настоящих соседних кадров по-прежнему не получают page-edge recovery и остаются защищены от ложного расширения."
+    "Финальный source-resolution X-refine теперь использует устойчивый canvas reference, согласованный с background-aware row mask, вместо медианы всего периметра длинной webtoon-страницы.",
+    "На MIXED-странице с неоднозначным border dominance non-dark путь повторяет legacy light fallback маски; edge-touching artwork больше не должен приниматься за canvas и обрезать правую/левую внешнюю границу кадра.",
+    "Диагностика side_refine фиксирует CANVAS_REFERENCE_RESOLVED с исходной и эффективной яркостью/spread, RGB, dominance, noise и выбранной стратегией.",
+    "Оптимизирована диагностика 0.5: JSONL writer больше не выполняет mkdir/stat на каждое событие и восстанавливает каталог только при реальном удалении во время работы.",
+    "Batch-страницы с одним trace path теперь переиспользуют общий diagnostics collector и общий append lock, уменьшая setup overhead и исключая независимые блокировки одного JSONL-файла.",
+    "Формат JSONL и немедленная запись каждого diagnostic event сохранены; диагностика не буферизуется и не участвует во внутренних pixel/Y-scan циклах геометрии.",
+    "Ускорен source-resolution поиск боковых границ: дорогой переход canvas→panel теперь использует ограниченную равномерную выборку Y и O(1) проверки X-кандидатов по prefix/run таблицам.",
+    "На эталонной синтетической странице 1200×6000 локальный проход 0.5.4 сократился примерно с 11.1 до 2.0 секунды без изменения итоговых quad; CI дополнительно проверяет геометрию.",
+    "Пакетный анализ BMB теперь сохраняет стабильный ID совпавшего кадра, но координаты, confidence и reason codes всегда берёт из свежего analyzer-owned результата."
   ]
 }
