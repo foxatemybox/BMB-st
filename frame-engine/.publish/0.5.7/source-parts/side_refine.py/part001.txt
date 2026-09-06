@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from math import ceil
+from statistics import median
+
+from PIL import Image
+
+from badloom_manga.crop_background_profile import PageBackgroundProfile
+from badloom_manga.crop_row_analysis import background_aware_ink_mask
+
+from .contract import PanelHypothesis
+from .diagnostics import DiagnosticsCollector, emit
+from .settings import FrameAnalysisSettings, SideRefineSettings
+
+
+NO_POINTS = "NO_POINTS"
+INSUFFICIENT_COVERAGE = "INSUFFICIENT_COVERAGE"
+RESIDUAL_TOO_HIGH = "RESIDUAL_TOO_HIGH"
+SEARCH_LIMIT = "SEARCH_LIMIT"
+OUTWARD_MOVE_REJECTED = "OUTWARD_MOVE_REJECTED"
+OUTWARD_RULE_ACCEPTED = "OUTWARD_RULE_ACCEPTED"
+PAGE_EDGE_CANVAS_REJECTED = "PAGE_EDGE_CANVAS_REJECTED"
+PAGE_EDGE_CONTINUATION_ACCEPTED = "PAGE_EDGE_CONTINUATION_ACCEPTED"
+MINIMUM_FRAME_WIDTH = "MINIMUM_FRAME_WIDTH"
+ACCEPTED = "ACCEPTED"
+UNCHANGED = "UNCHANGED"
+
+
+@dataclass(frozen=True, slots=True)
+class SideLineDecision:
+    top: int | None
+    bottom: int | None
+    code: str
+    points: int = 0
+    coverage: float = 0.0
+    residual: float | None = None
+
+    @property
+    def resolved(self) -> bool:
+        return self.top is not None and self.bottom is not None
+
+
+def source_resolution_side_line(
+    source: Image.Image,
+    background: PageBackgroundProfile,
+    *,
+    top: int,
+    bottom: int,
+    coarse_top: int,
+    coarse_bottom: int,
+    edge: str,
+    settings: SideRefineSettings,
+    allow_page_edge_recovery: bool = False,
+) -> SideLineDecision:
+    """Resolve one panel side at source X resolution.
+
+    Reduced masks may provide a coarse span that is either wider *or narrower*
+    than the real panel. The final X owner therefore first looks for a
+    persistent page-canvas/panel transition on both sides of the coarse line.
+    Only when no such transition can be fitted does it fall back to the older
+    inward ink-boundary fit. This lets a narrow coarse span expand back to a
+    real panel rule without allowing a local balloon/SFX to own the side.
+    """
+
+    if edge not in {"left", "right"}:
+        raise ValueError("edge must be left or right")
+    width, height = source.size
+    top = max(0, min(height - 1, int(top)))
+    bottom = max(top + 1, min(height, int(bottom)))
+    if width < 16 or bottom - top < 16:
+        return SideLineDecision(None, None, INSUFFICIENT_COVERAGE)
+
+    coarse_top = max(0, min(width, int(coarse_top)))
+    coarse_bottom = max(0, min(width, int(coarse_bottom)))
+    ordinary_search = max(18, int(round(width * settings.ordinary_search_fraction)))
+    transition_fraction = max(
+        float(settings.ordinary_search_fraction),
+        float(getattr(settings, "outward_search_fraction", 0.18)),
+    )
+    transition_search = max(ordinary_search, int(round(width * transition_fraction)))
+    page_edge_coarse = (
+        edge == "left" and min(coarse_top, coarse_bottom) <= 6
+    ) or (
+        edge == "right" and max(coarse_top, coarse_bottom) >= width - 6
+    )
+    if page_edge_coarse:
+        ordinary_search = max(
+            ordinary_search,
+            int(round(width * settings.page_edge_search_fraction)),
+        )
+        transition_search = max(transition_search, ordinary_search)
+    ordinary_search = max(
+        12,
+        min(int(settings.maximum_search_source), ordinary_search),
+    )
+    transition_search = max(
+        12,
+        min(int(settings.maximum_search_source), transition_search),
+    )
+
+    band = source.crop((0, top, width, bottom))
+    reduced = None
+    mask = None
+    try:
+        target_height = max(96, min(448, band.height))
+        reduced = (
+            band.copy()
+            if band.height == target_height
+            else band.resize((width, target_height), Image.Resampling.BOX)
+        )
+
+        if (
+            allow_page_edge_recovery
+            and not page_edge_coarse
+            and _page_edge_continuation_support(
+                reduced,
+                background,
+                edge=edge,
+                coarse_top=coarse_top,
+                coarse_bottom=coarse_bottom,
+            )
+        ):
+            physical = 0 if edge == "left" else width
+            return SideLineDecision(
+                physical,
+                physical,
+                PAGE_EDGE_CONTINUATION_ACCEPTED,
+                points=target_height,
+                coverage=1.0,
+                residual=0.0,
+            )
+
+        transition = _canvas_transition_side_line(
+            reduced,
+            background,
+            coarse_top=coarse_top,
+            coarse_bottom=coarse_bottom,
+            edge=edge,
+            search=transition_search,
+            settings=settings,
+        )
+        if transition is not None:
+            final_top, final_bottom, residual, retained = transition
+            final_top = max(0, min(width, int(round(final_top))))
+            final_bottom = max(0, min(width, int(round(final_bottom))))
+            if (
+                abs(final_top - coarse_top) <= transition_search
+                and abs(final_bottom - coarse_bottom) <= transition_search
+            ):
+                if page_edge_coarse and not _page_edge_canvas_support(
+                    reduced,
+                    background,
+                    edge=edge,
+                    coarse_top=coarse_top,
+                    coarse_bottom=coarse_bottom,
+                    final_top=final_top,
+                    final_bottom=final_bottom,
+                ):
+                    return SideLineDecision(
+                        None,
+                        None,
+                        PAGE_EDGE_CANVAS_REJECTED,
+                        points=retained,
+                        coverage=retained / target_height,
+                        residual=residual,
+                    )
+                tolerance = max(0, int(settings.outward_tolerance_source))
+                outward = _maximum_outward_move(
+                    edge,
+                    coarse_top,
+                    coarse_bottom,
+                    final_top,
+                    final_bottom,
+                )
+                code = (
+                    OUTWARD_RULE_ACCEPTED
+                    if outward > tolerance
+                    else UNCHANGED
+                    if (final_top, final_bottom) == (coarse_top, coarse_bottom)
+                    else ACCEPTED
+                )
+                return SideLineDecision(
+                    final_top,
+                    final_bottom,
+                    code,
+                    points=retained,
+                    coverage=retained / target_height,
+                    residual=residual,
+                )
+
+        mask = background_aware_ink_mask(reduced, background)
+        pixels = mask.load()
+        points: list[tuple[float, float]] = []
+        denominator = max(1, target_height - 1)
+        for y in range(target_height):
+            fraction = y / denominator
+            predicted = float(coarse_top) + (
+                float(coarse_bottom) - float(coarse_top)
+            ) * fraction
+            if edge == "left":
+                start = max(0, int(round(predicted)) - 5)
+                end = min(width, int(round(predicted)) + ordinary_search + 1)
+                candidate = next(
+                    (
+                        x
+                        for x in range(start, end)
+                        if int(pixels[x, y]) >= 128
+                    ),
+                    None,
+                )
+            else:
+                start = max(0, int(round(predicted)) - ordinary_search)
+                end = min(width, int(round(predicted)) + 6)
+                candidate = next(
+                    (
+                        x + 1
+                        for x in range(end - 1, start - 1, -1)
+                        if int(pixels[x, y]) >= 128
+                    ),
