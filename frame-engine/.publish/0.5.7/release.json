@@ -1,6 +1,13 @@
 {
   "version": "0.5.7",
   "engine_api": "0.5",
-  "source_mode": "bd-source",
-  "source_commit": "3ad1a349173b4ca6922b5578688bddcbaf11b879"
+  "source_mode": "overlay",
+  "source_commit": "3ad1a349173b4ca6922b5578688bddcbaf11b879",
+  "base_version": "0.5.4",
+  "base_sha256": "06c8837a9b6d43feaee53d887abca1775ba13a38fbfd1878e7ea46ac266ea7e4",
+  "overlay_git_blobs": {
+    "diagnostics.py": "f4f66e81ea2f9609626184d1a94a6f15a257347c",
+    "pipeline.py": "66ca6b53259ba151a20cb35406759cbcb8cda67f",
+    "side_refine.py": "0c96d0aebcdb8d06a4b07e5585714671bc7438b4"
+  }
 }
