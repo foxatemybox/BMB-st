@@ -18,7 +18,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Decode, verify and stage pending frame engine
+      - name: Build or decode, verify and stage pending frame engine
         id: release
         shell: bash
         run: |
@@ -27,11 +27,16 @@ jobs:
           from __future__ import annotations
 
           from datetime import datetime, timezone
+          from io import BytesIO
           from pathlib import Path
+          import ast
           import base64
           import hashlib
           import json
           import os
+          import re
+          import shutil
+          import subprocess
           import zipfile
 
           publish_root = Path("frame-engine/.publish")
@@ -51,25 +56,114 @@ jobs:
           spec = json.loads(spec_path.read_text(encoding="utf-8"))
           version = str(spec.get("version") or "").strip()
           engine_api = str(spec.get("engine_api") or "").strip()
-          expected_sha = str(spec.get("sha256") or "").strip().lower()
-          expected_size = int(spec.get("size") or 0)
-          source_commit = str(spec.get("source_commit") or "").strip()
+          source_commit = str(spec.get("source_commit") or "").strip().lower()
+          source_mode = str(spec.get("source_mode") or "base64").strip().lower()
           changelog = [str(item).strip() for item in spec.get("changelog", []) if str(item).strip()]
           if not version or engine_api != "0.5":
               raise SystemExit("release identity is invalid")
-          if len(expected_sha) != 64 or expected_size < 1:
-              raise SystemExit("release digest/size is invalid")
 
-          parts = sorted(source.glob("part*.b64"))
-          if not parts:
-              raise SystemExit("release has no base64 parts")
-          encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
-          payload = base64.b64decode(encoded, validate=True)
-          actual_sha = hashlib.sha256(payload).hexdigest()
-          if len(payload) != expected_size:
-              raise SystemExit(f"bundle size mismatch: {len(payload)} != {expected_size}")
-          if actual_sha != expected_sha:
-              raise SystemExit(f"bundle sha256 mismatch: {actual_sha} != {expected_sha}")
+          def version_key(value: str) -> tuple[int, ...]:
+              head = str(value).split("-", 1)[0]
+              result = []
+              for part in head.split("."):
+                  try:
+                      result.append(int(part))
+                  except ValueError:
+                      result.append(0)
+              return tuple(result)
+
+          current_manifest_path = Path("frame-engine/frame-engine-channel.json")
+          if current_manifest_path.is_file():
+              current_manifest = json.loads(current_manifest_path.read_text(encoding="utf-8"))
+              current_version = str(current_manifest.get("version") or "")
+              if current_version and version_key(version) < version_key(current_version):
+                  raise SystemExit(f"stable channel downgrade refused: {version} < {current_version}")
+
+          if source_mode == "bd-source":
+              if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+                  raise SystemExit("bd-source release requires a full 40-character source_commit")
+              checkout = Path(".frame-engine-bd-source")
+              shutil.rmtree(checkout, ignore_errors=True)
+              checkout.mkdir(parents=True)
+              subprocess.run(["git", "-C", str(checkout), "init", "-q"], check=True)
+              subprocess.run(
+                  ["git", "-C", str(checkout), "remote", "add", "origin", "https://github.com/foxatemybox/BD.git"],
+                  check=True,
+              )
+              subprocess.run(
+                  ["git", "-C", str(checkout), "fetch", "--depth=1", "origin", source_commit],
+                  check=True,
+              )
+              resolved_commit = subprocess.check_output(
+                  ["git", "-C", str(checkout), "rev-parse", "FETCH_HEAD"], text=True
+              ).strip().lower()
+              if resolved_commit != source_commit:
+                  raise SystemExit(f"source commit mismatch: {resolved_commit} != {source_commit}")
+              subprocess.run(
+                  ["git", "-C", str(checkout), "checkout", "-q", "--detach", "FETCH_HEAD"],
+                  check=True,
+              )
+
+              engine_source = checkout / "badloom_manga" / "frame_analysis_v05"
+              pipeline_path = engine_source / "pipeline.py"
+              if not pipeline_path.is_file():
+                  raise SystemExit("BD source commit has no frame_analysis_v05/pipeline.py")
+              tree = ast.parse(pipeline_path.read_text(encoding="utf-8"), filename=str(pipeline_path))
+              constants = {}
+              for node in tree.body:
+                  if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                      continue
+                  target = node.targets[0]
+                  if isinstance(target, ast.Name) and target.id in {"ENGINE_API", "ENGINE_VERSION", "ENGINE_CHANGELOG"}:
+                      constants[target.id] = ast.literal_eval(node.value)
+              source_api = str(constants.get("ENGINE_API") or "")
+              source_version = str(constants.get("ENGINE_VERSION") or "")
+              if source_api != engine_api:
+                  raise SystemExit(f"source engine API mismatch: {source_api!r} != {engine_api!r}")
+              if source_version != version:
+                  raise SystemExit(f"source engine version mismatch: {source_version!r} != {version!r}")
+              if not changelog:
+                  source_changelog = constants.get("ENGINE_CHANGELOG") or ()
+                  changelog = [str(item).strip() for item in source_changelog if str(item).strip()]
+
+              files = sorted(engine_source.rglob("*.py"))
+              if not files or not (engine_source / "__init__.py").is_file():
+                  raise SystemExit("BD frame engine source is incomplete")
+              buffer = BytesIO()
+              with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+                  for path in files:
+                      relative = path.relative_to(engine_source)
+                      name = (Path("badloom_frame_engine") / relative).as_posix()
+                      info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                      info.compress_type = zipfile.ZIP_DEFLATED
+                      info.external_attr = 0o100644 << 16
+                      archive.writestr(info, path.read_bytes())
+              payload = buffer.getvalue()
+              actual_sha = hashlib.sha256(payload).hexdigest()
+              expected_sha = str(spec.get("sha256") or actual_sha).strip().lower()
+              expected_size = int(spec.get("size") or len(payload))
+              if actual_sha != expected_sha:
+                  raise SystemExit(f"source-built bundle sha256 mismatch: {actual_sha} != {expected_sha}")
+              if len(payload) != expected_size:
+                  raise SystemExit(f"source-built bundle size mismatch: {len(payload)} != {expected_size}")
+              print(f"built engine {version} from BD commit {source_commit}")
+          elif source_mode == "base64":
+              expected_sha = str(spec.get("sha256") or "").strip().lower()
+              expected_size = int(spec.get("size") or 0)
+              if len(expected_sha) != 64 or expected_size < 1:
+                  raise SystemExit("release digest/size is invalid")
+              parts = sorted(source.glob("part*.b64"))
+              if not parts:
+                  raise SystemExit("release has no base64 parts")
+              encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
+              payload = base64.b64decode(encoded, validate=True)
+              actual_sha = hashlib.sha256(payload).hexdigest()
+              if len(payload) != expected_size:
+                  raise SystemExit(f"bundle size mismatch: {len(payload)} != {expected_size}")
+              if actual_sha != expected_sha:
+                  raise SystemExit(f"bundle sha256 mismatch: {actual_sha} != {expected_sha}")
+          else:
+              raise SystemExit(f"unsupported source_mode: {source_mode!r}")
 
           release_dir = Path("frame-engine/releases") / version
           bundle_name = f"badloom-frame-engine-{version}.zip"
@@ -103,7 +197,7 @@ jobs:
               "source_commit": source_commit,
               "changelog": changelog,
           }
-          Path("frame-engine/frame-engine-channel.json").write_text(
+          current_manifest_path.write_text(
               json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
               encoding="utf-8",
               newline="\n",
@@ -111,7 +205,6 @@ jobs:
           readme = Path("frame-engine/README.md")
           if readme.is_file():
               text = readme.read_text(encoding="utf-8")
-              import re
               text = re.sub(
                   r"Current stable engine: `[^`]+`\.",
                   f"Current stable engine: `{version}`.",
