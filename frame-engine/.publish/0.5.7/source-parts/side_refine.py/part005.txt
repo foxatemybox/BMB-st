@@ -1,0 +1,66 @@
+        len(current),
+    )
+
+
+def _dominant_line_seed(
+    points: list[tuple[float, float]],
+    height: int,
+    *,
+    minimum_points: int,
+    maximum_residual: float,
+) -> list[tuple[float, float]] | None:
+    if len(points) < minimum_points:
+        return None
+    sample_count = 40
+    if len(points) > sample_count:
+        sample = [
+            points[round(index * (len(points) - 1) / (sample_count - 1))]
+            for index in range(sample_count)
+        ]
+    else:
+        sample = points
+
+    minimum_separation = max(4.0, height * 0.18)
+    tolerance = max(2.0, min(float(maximum_residual), 4.0))
+    best: list[tuple[float, float]] | None = None
+    best_score: tuple[int, float, float] | None = None
+    for first_index, (first_y, first_x) in enumerate(sample):
+        for second_y, second_x in sample[first_index + 1 :]:
+            delta_y = second_y - first_y
+            if abs(delta_y) < minimum_separation:
+                continue
+            slope = (second_x - first_x) / delta_y
+            intercept = first_x - slope * first_y
+            inliers: list[tuple[float, float]] = []
+            residual_sum = 0.0
+            for point in points:
+                y, x = point
+                residual = abs(x - (slope * y + intercept))
+                if residual <= tolerance:
+                    inliers.append(point)
+                    residual_sum += residual
+            if len(inliers) < minimum_points:
+                continue
+            span = max(y for y, _x in inliers) - min(y for y, _x in inliers)
+            score = (len(inliers), span, -residual_sum)
+            if best_score is None or score > best_score:
+                best_score = score
+                best = inliers
+    return best
+
+
+__all__ = [
+    "ACCEPTED",
+    "INSUFFICIENT_COVERAGE",
+    "MINIMUM_FRAME_WIDTH",
+    "NO_POINTS",
+    "OUTWARD_MOVE_REJECTED",
+    "OUTWARD_RULE_ACCEPTED",
+    "PAGE_EDGE_CANVAS_REJECTED",
+    "PAGE_EDGE_CONTINUATION_ACCEPTED",
+    "RESIDUAL_TOO_HIGH",
+    "SEARCH_LIMIT",
+    "SideLineDecision",
+    "source_resolution_side_line",
+    "refine_panel_sides",
+]
